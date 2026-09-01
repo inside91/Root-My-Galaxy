@@ -215,7 +215,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 helper.absolutePath,
                 "--run-payload",
                 payload.absolutePath,
-                helper.absolutePath,
+                umhHelper.absolutePath,
                 logFile.absolutePath,
             ).redirectErrorStream(true)
             processBuilder.environment().apply {
@@ -380,6 +380,20 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             .putString(P0_CACHE_BOOT_TOKEN, bootToken)
             .putString(P0_CACHE_OFFSET, value)
             .apply()
+    }
+
+    private fun stageUmhHelper(source: File): File {
+        val staged = File(app.filesDir, "cve-2026-43499-root")
+        if (!staged.exists() || staged.length() != source.length()) {
+            source.inputStream().use { input ->
+                staged.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+        }
+        staged.setReadable(true, false)
+        staged.setExecutable(true, false)
+        return staged
     }
 
     private fun helperFile(): File =
