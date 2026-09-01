@@ -211,6 +211,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
                 shizukuEnvironment(timeout, bootToken, stagedPayload.absolutePath, helper.absolutePath),
             )
         } else {
+            val umhHelper = stageUmhHelper(helper)
             val processBuilder = ProcessBuilder(
                 helper.absolutePath,
                 "--run-payload",
