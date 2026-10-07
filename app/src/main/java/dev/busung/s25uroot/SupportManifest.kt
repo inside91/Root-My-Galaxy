@@ -6,6 +6,7 @@ import org.json.JSONObject
 data class RemoteArtifact(
     val url: String,
     val size: Long,
+    val sha256: String? = null,
 )
 
 data class TargetProfile(
@@ -57,6 +58,7 @@ data class SupportManifest(
                         RemoteArtifact(
                             url = it.getString("url"),
                             size = it.getLong("size"),
+                            sha256 = it.optionalSha256(),
                         )
                     }
                     add(
@@ -68,10 +70,12 @@ data class SupportManifest(
                             exploit = RemoteArtifact(
                                 url = exploit.getString("url"),
                                 size = exploit.getLong("size"),
+                                sha256 = exploit.optionalSha256(),
                             ),
                             kernelSu = RemoteArtifact(
                                 url = kernelSu.getString("url"),
                                 size = kernelSu.getLong("size"),
+                                sha256 = kernelSu.optionalSha256(),
                             ),
                             kernelSuNext = kernelSuNext,
                         ),
@@ -84,5 +88,13 @@ data class SupportManifest(
         private fun JSONArray.strings(): Set<String> = buildSet {
             for (index in 0 until length()) add(getString(index))
         }
+
+        private val SHA256_REGEX = Regex("[0-9a-fA-F]{64}")
+
+        /* sha256 is optional for backward compatibility, but when present it
+         * must be a well-formed 64-char hex digest; anything else is treated
+         * as a corrupt manifest rather than silently ignored. */
+        private fun JSONObject.optionalSha256(): String? = optString("sha256", "").ifBlank { null }
+            ?.let { require(SHA256_REGEX.matches(it)) { "Malformed sha256 digest" }; it.lowercase() }
     }
 }

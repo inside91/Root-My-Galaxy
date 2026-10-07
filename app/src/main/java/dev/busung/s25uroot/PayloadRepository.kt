@@ -7,6 +7,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import org.json.JSONObject
 
 data class VerifiedPayloads(
@@ -85,12 +86,31 @@ class PayloadRepository(private val context: Context) {
         }
         connection.disconnect()
         require(total == artifact.size) { context.getString(R.string.repo_incomplete, label) }
+        if (artifact.sha256 != null) {
+            val digest = sha256Of(temporary)
+            require(digest == artifact.sha256) {
+                context.getString(R.string.repo_hash_mismatch, label)
+            }
+        }
         if (destination.exists()) destination.delete()
         require(temporary.renameTo(destination)) {
             context.getString(R.string.repo_finalize_failed, label)
         }
         onProgress(context.getString(R.string.repo_verified, label))
         return destination
+    }
+
+    private fun sha256Of(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun resolveMainCommit(): String {
@@ -128,15 +148,59 @@ class PayloadRepository(private val context: Context) {
         return bytes
     }
 
-    private fun open(url: String): HttpURLConnection =
-        (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 15_000
-            readTimeout = 60_000
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "S25URoot/${BuildConfig.VERSION_NAME}")
-            connect()
-            require(responseCode == HttpURLConnection.HTTP_OK) { "HTTP $responseCode" }
+    private fun open(url: String): HttpURLConnection {
+        var current = url
+        var hops = 0
+        var connection: HttpURLConnection
+        do {
+            connection = (URL(current).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15_000
+                readTimeout = 60_000
+                /* Resolve redirects manually so every hop can be checked
+                 * against ALLOWED_REDIRECT_HOSTS; a blind
+                 * instanceFollowRedirects=true would chase a Location to
+                 * plain HTTP or an untrusted host. */
+                instanceFollowRedirects = false
+                setRequestProperty("User-Agent", "S25URoot/${BuildConfig.VERSION_NAME}")
+                connect()
+            }
+            if (responseCodeIsRedirect(connection.responseCode)) {
+                connection.disconnect()
+                current = followTrustedRedirect(connection)
+                hops++
+                require(hops <= MAX_REDIRECT_HOPS) { "Too many redirects" }
+                continue
+            }
+            break
+        } while (true)
+        require(connection.responseCode == HttpURLConnection.HTTP_OK) {
+            "HTTP ${connection.responseCode}"
         }
+        return connection
+    }
+
+    private fun followTrustedRedirect(connection: HttpURLConnection): String {
+        require(responseCodeIsRedirect(connection.responseCode)) {
+            "HTTP ${connection.responseCode}"
+        }
+        val location = connection.getHeaderField("Location")
+            ?: error("Redirect without Location header")
+        val resolved = URL(connection.url, location).toString()
+        val target = URL(resolved)
+        require(target.protocol.equals("https", ignoreCase = true)) {
+            "Refusing non-HTTPS redirect: $resolved"
+        }
+        require(ALLOWED_REDIRECT_HOSTS.any { target.host.equals(it, ignoreCase = true) }) {
+            "Refusing redirect to untrusted host: ${target.host}"
+        }
+        return resolved
+    }
+
+    private fun responseCodeIsRedirect(code: Int): Boolean =
+        code == HttpURLConnection.HTTP_MOVED_PERM ||
+            code == HttpURLConnection.HTTP_MOVED_TEMP ||
+            code == HttpURLConnection.HTTP_SEE_OTHER ||
+            code == 307 || code == 308
 
     companion object {
         private const val COMMIT_API_URL =
@@ -145,6 +209,16 @@ class PayloadRepository(private val context: Context) {
             "https://raw.githubusercontent.com/inside91/Root-My-Galaxy-Payloads"
         private const val MUTABLE_RAW_PREFIX = "$RAW_REPOSITORY/a54x-test/"
         private const val MAX_COMMIT_RESPONSE_BYTES = 16 * 1024
+        /* Hosts a redirect (or the initial URL) may resolve to.  GitHub serves
+         * release assets from objects.githubusercontent.com. */
+        private val ALLOWED_REDIRECT_HOSTS = setOf(
+            "raw.githubusercontent.com",
+            "objects.githubusercontent.com",
+            "github.com",
+            "api.github.com",
+            "codeload.github.com",
+        )
         private const val MAX_MANIFEST_BYTES = 256 * 1024
+        private const val MAX_REDIRECT_HOPS = 5
     }
 }
