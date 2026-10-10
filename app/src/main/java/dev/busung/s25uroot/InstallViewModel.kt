@@ -184,6 +184,7 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
             } catch (error: Throwable) {
                 appendLog("[-] ${error.message ?: error.javaClass.simpleName}")
                 setPhase(InstallPhase.Failed, app.getString(R.string.status_install_failed))
+                cleanupTempArtifacts()
                 finishHistory(InstallRunResult.Failed)
             }
         }
@@ -333,6 +334,30 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         if (lateLoad.output.isNotBlank()) appendLog(lateLoad.output)
         storeInstallReceipt()
         appendLog(app.getString(R.string.log_ksu_control_verified, label))
+        cleanupTempArtifacts()
+    }
+
+    /**
+     * Remove the exploit staging residue from /data/local/tmp.
+     *
+     * Everything staged there has already been consumed by this point: the
+     * payload ran, the UMH helper is gone, and KernelSU owns /data/adb/ksud.
+     * The leftovers are the strongest non-root indicator an integrity or
+     * banking app can read, because the directory is world-searchable and the
+     * file names (ksud-*, ksu-*, temp_su.sock) are catalogued.  Removing them
+     * also stops the directory's inode/mtime drifting away from stock.
+     *
+     * Runs as root through the bootstrap daemon, so it works on the failure
+     * path too; a dead daemon just makes this a no-op.
+     */
+    private fun cleanupTempArtifacts() {
+        val command = "rm -f " + TEMP_ARTIFACTS.joinToString(" ") + " 2>/dev/null"
+        runCatching {
+            val result = runHelper("-c", command)
+            if (result.code != 0) {
+                appendLog("[!] tmp cleanup rc=${result.code}")
+            }
+        }
     }
 
     private fun detectInstalled(): Boolean {
@@ -555,6 +580,21 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
         private const val SHIZUKU_PAYLOAD_PATH = "/data/local/tmp/ksu-payload"
         private const val SHIZUKU_KSUD_PATH = "/data/local/tmp/ksud-s25u-kdp"
         private const val SHIZUKU_KSUD_STAGE_PATH = "/data/local/tmp/.ksud-stage"
+
+        /**
+         * Everything this installer (or the payload/daemon) can leave behind in
+         * /data/local/tmp.  Kept in one place so the cleanup and the shizuku
+         * staging constants cannot drift apart.
+         */
+        private val TEMP_ARTIFACTS = listOf(
+            SHIZUKU_KSUD_PATH,
+            SHIZUKU_KSUD_STAGE_PATH,
+            SHIZUKU_LOG_PATH,
+            SHIZUKU_HELPER_PATH,
+            SHIZUKU_PAYLOAD_PATH,
+            "/data/local/tmp/cve-2026-43499-root",
+            "/data/local/tmp/temp_su.sock",
+        )
         private val LOG_POLL_INTERVAL = 250.milliseconds
         private val SHIZUKU_LOG_POLL_INTERVAL = 1.seconds
         private val ANSI_ESCAPE = Regex("\u001B\\[[0-?]*[ -/]*[@-~]")
