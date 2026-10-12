@@ -351,11 +351,22 @@ class InstallViewModel(application: Application) : AndroidViewModel(application)
      * path too; a dead daemon just makes this a no-op.
      */
     private fun cleanupTempArtifacts() {
-        val command = "rm -f " + TEMP_ARTIFACTS.joinToString(" ") + " 2>/dev/null"
+        /*
+         * Use the absolute rm path.  The helper is spawned with a minimal
+         * environment whose PATH does not include /system/bin, so the previous
+         * bare "rm -f ..." failed with rc=127 (command not found) and every
+         * staging artefact survived in /data/local/tmp.  /system/bin/rm is the
+         * toybox binary and is always present.  Report the real exit code so a
+         * regression is visible in the install log instead of silent.
+         */
+        val command = "/system/bin/rm -f " + TEMP_ARTIFACTS.joinToString(" ") +
+            " 2>/dev/null"
         runCatching {
             val result = runHelper("-c", command)
             if (result.code != 0) {
                 appendLog("[!] tmp cleanup rc=${result.code}")
+            } else {
+                appendLog("[*] tmp cleanup ok")
             }
         }
     }
